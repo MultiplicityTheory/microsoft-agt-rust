@@ -46,22 +46,28 @@ pub struct RiskScore {
     pub critical_signals: u32,
 }
 
+struct RiskState {
+    scores: HashMap<String, RiskScore>,
+    signals: HashMap<String, Vec<RiskSignal>>,
+}
+
 pub struct RiskScorer {
-    scores: Arc<RwLock<HashMap<String, RiskScore>>>,
-    signals: Arc<RwLock<HashMap<String, Vec<RiskSignal>>>>,
+    state: Arc<RwLock<RiskState>>,
 }
 
 impl RiskScorer {
     pub fn new() -> Self {
         Self {
-            scores: Arc::new(RwLock::new(HashMap::new())),
-            signals: Arc::new(RwLock::new(HashMap::new())),
+            state: Arc::new(RwLock::new(RiskState {
+                scores: HashMap::new(),
+                signals: HashMap::new(),
+            })),
         }
     }
 
     pub fn get_score(&self, agent_did: &str) -> RiskScore {
-        let scores = self.scores.read().unwrap();
-        scores.get(agent_did).cloned().unwrap_or_else(|| RiskScore {
+        let state = self.state.read().unwrap();
+        state.scores.get(agent_did).cloned().unwrap_or_else(|| RiskScore {
             agent_did: agent_did.to_string(),
             total_score: 500, // Default
             identity_score: 50,
@@ -74,19 +80,25 @@ impl RiskScorer {
     }
 
     pub fn add_signal(&self, agent_did: &str, signal: RiskSignal) {
-        let mut signals = self.signals.write().unwrap();
-        signals.entry(agent_did.to_string()).or_default().push(signal.clone());
+        let mut state = self.state.write().unwrap();
+        state.signals.entry(agent_did.to_string()).or_default().push(signal.clone());
         
         // Trigger recalculation if critical
         if matches!(signal.severity, RiskSeverity::Critical) {
-            drop(signals); // Release lock before calling recalculate
-            self.recalculate(agent_did);
+            let score = Self::calculate_score(agent_did, &state.signals);
+            state.scores.insert(agent_did.to_string(), score);
         }
     }
 
     pub fn recalculate(&self, agent_did: &str) -> RiskScore {
-        let signals = self.signals.read().unwrap();
-        let agent_signals = signals.get(agent_did).cloned().unwrap_or_default();
+        let mut state = self.state.write().unwrap();
+        let score = Self::calculate_score(agent_did, &state.signals);
+        state.scores.insert(agent_did.to_string(), score.clone());
+        score
+    }
+
+    fn calculate_score(agent_did: &str, signals_map: &HashMap<String, Vec<RiskSignal>>) -> RiskScore {
+        let agent_signals = signals_map.get(agent_did).cloned().unwrap_or_default();
         
         let cutoff = Utc::now() - Duration::hours(24);
         let recent_signals: Vec<RiskSignal> = agent_signals
@@ -110,7 +122,7 @@ impl RiskScorer {
 
         let total_score = (identity * 2 + behavior * 3 + network * 2 + compliance * 3) / 10;
 
-        let new_score = RiskScore {
+        RiskScore {
             agent_did: agent_did.to_string(),
             total_score: total_score.min(1000),
             identity_score: identity.min(100),
@@ -119,11 +131,7 @@ impl RiskScorer {
             compliance_score: compliance.min(100),
             active_signals: recent_signals.len() as u32,
             critical_signals: recent_signals.iter().filter(|s| matches!(s.severity, RiskSeverity::Critical)).count() as u32,
-        };
-
-        let mut scores = self.scores.write().unwrap();
-        scores.insert(agent_did.to_string(), new_score.clone());
-        new_score
+        }
     }
 }
 

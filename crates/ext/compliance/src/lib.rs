@@ -10,7 +10,7 @@ pub struct ComplianceReport {
 pub struct ComplianceVerifier;
 
 impl ComplianceVerifier {
-    pub fn verify_policy(&self, agent_did: &str, policy_id: &str) -> ComplianceReport {
+    pub fn verify_policy(&self, agent_did: &str, _policy_id: &str) -> ComplianceReport {
         // Placeholder for real verification logic
         ComplianceReport {
             agent_did: agent_did.to_string(),

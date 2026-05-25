@@ -2,3 +2,12 @@
 name = "agent-ext-mcp-governance"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+agent-mesh-core = { path = "../../core/mesh" }
+agent-runtime-core = { path = "../../core/runtime" }

@@ -16,7 +16,6 @@ ring = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 rand = "0.8"
-sha256 = "1.5"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 sha2 = "0.10"
 hex = "0.4"

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH, Instant, Duration};
+use std::time::{Instant, Duration};
 use std::sync::RwLock;
 use async_trait::async_trait;
 
@@ -148,7 +148,7 @@ impl StatelessKernel {
     fn check_policies(
         &self,
         action: &str,
-        params: &HashMap<String, serde_json::Value>,
+        _params: &HashMap<String, serde_json::Value>,
         policy_names: &[String],
     ) -> Result<(), String> {
         for policy_name in policy_names {

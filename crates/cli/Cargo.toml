@@ -2,3 +2,19 @@
 name = "agent-cli"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = { workspace = true }
+agent-mesh-core = { path = "../core/mesh" }
+agent-runtime-core = { path = "../core/runtime" }
+agent-ext-mcp-governance = { path = "../ext/mcp-governance" }
+
+[[bin]]
+name = "agt"
+path = "src/main.rs"

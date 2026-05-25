@@ -3,6 +3,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use base64::{Engine as _, engine::general_purpose};
+use sha2::{Sha256, Digest};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Hash, Eq, PartialEq)]
 pub struct AgentDID {
@@ -13,7 +14,9 @@ pub struct AgentDID {
 impl AgentDID {
     pub fn new(name: &str, org: Option<&str>) -> Self {
         let seed = format!("{}:{}", name, org.unwrap_or("default"));
-        let hash = sha256::digest(seed);
+        let mut hasher = Sha256::new();
+        hasher.update(seed.as_bytes());
+        let hash = hex::encode(hasher.finalize());
         Self {
             method: "mesh".to_string(),
             unique_id: hash[..32].to_string(),
