@@ -2,6 +2,10 @@ use agent_runtime_core::rings::enforcer::{Enforcer, PrivilegeRing};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{warn, info};
+use anyhow::Result;
+
+pub mod store;
+use crate::store::{PolicyStore, MemoryPolicyStore};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct McpTool {
@@ -18,14 +22,14 @@ pub struct McpPolicy {
 
 pub struct PolicyEnforcer {
     tools: HashMap<String, McpTool>,
-    policies: HashMap<String, McpPolicy>, // agent_did -> policy
+    store: Box<dyn PolicyStore>,
 }
 
 impl PolicyEnforcer {
-    pub fn new() -> Self {
+    pub fn new(store: Option<Box<dyn PolicyStore>>) -> Self {
         Self {
             tools: HashMap::new(),
-            policies: HashMap::new(),
+            store: store.unwrap_or_else(|| Box::new(MemoryPolicyStore::new())),
         }
     }
 
@@ -34,12 +38,12 @@ impl PolicyEnforcer {
         self.tools.insert(tool.name.clone(), tool);
     }
 
-    pub fn set_policy(&mut self, agent_did: &str, policy: McpPolicy) {
+    pub async fn set_policy(&mut self, agent_did: &str, policy: McpPolicy) -> Result<()> {
         info!(agent_did = agent_did, "Setting policy for agent");
-        self.policies.insert(agent_did.to_string(), policy);
+        self.store.save_policy(agent_did, policy).await
     }
 
-    pub fn can_call_tool(
+    pub async fn can_call_tool(
         &self,
         agent_did: &str,
         agent_ring: PrivilegeRing,
@@ -59,7 +63,7 @@ impl PolicyEnforcer {
         }
 
         // 2. Check specific policy if exists
-        if let Some(policy) = self.policies.get(agent_did) {
+        if let Ok(Some(policy)) = self.store.load_policy(agent_did).await {
             if policy.denylist.contains(&tool_name.to_string()) {
                 warn!(agent_did = agent_did, tool = tool_name, "Tool is in denylist for agent");
                 return false;
@@ -79,9 +83,9 @@ impl PolicyEnforcer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_policy_enforcement() {
-        let mut enforcer = PolicyEnforcer::new();
+    #[tokio::test]
+    async fn test_policy_enforcement() {
+        let mut enforcer = PolicyEnforcer::new(None);
         
         enforcer.register_tool(McpTool {
             name: "read_secret".to_string(),
@@ -90,16 +94,16 @@ mod tests {
         });
 
         // Case 1: Insufficient ring
-        assert!(!enforcer.can_call_tool("agent-1", PrivilegeRing::Standard, "read_secret"));
+        assert!(!enforcer.can_call_tool("agent-1", PrivilegeRing::Standard, "read_secret").await);
 
         // Case 2: Sufficient ring
-        assert!(enforcer.can_call_tool("agent-1", PrivilegeRing::Trusted, "read_secret"));
+        assert!(enforcer.can_call_tool("agent-1", PrivilegeRing::Trusted, "read_secret").await);
 
         // Case 3: Denylist
         enforcer.set_policy("agent-1", McpPolicy {
             allowed_tools: vec![],
             denylist: vec!["read_secret".to_string()],
-        });
-        assert!(!enforcer.can_call_tool("agent-1", PrivilegeRing::Trusted, "read_secret"));
+        }).await.unwrap();
+        assert!(!enforcer.can_call_tool("agent-1", PrivilegeRing::Trusted, "read_secret").await);
     }
 }

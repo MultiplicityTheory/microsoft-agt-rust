@@ -4,6 +4,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use base64::{Engine as _, engine::general_purpose};
 use sha2::{Sha256, Digest};
+use crate::identity::keystore::KeyStore;
+use anyhow::Result;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Hash, Eq, PartialEq)]
 pub struct AgentDID {
@@ -45,12 +47,13 @@ pub struct AgentIdentity {
 }
 
 impl AgentIdentity {
-    pub fn create(
+    pub async fn create(
         name: String,
         sponsor: String,
         capabilities: Vec<String>,
         organization: Option<String>,
-    ) -> Self {
+        keystore: Option<&dyn KeyStore>,
+    ) -> Result<Self> {
         let mut rng = OsRng;
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);
@@ -58,10 +61,15 @@ impl AgentIdentity {
         let public_key = signing_key.verifying_key();
         
         let did = AgentDID::new(&name, organization.as_deref());
+        let did_str = did.to_string();
         
         let public_key_b64 = general_purpose::STANDARD.encode(public_key.to_bytes());
 
-        Self {
+        if let Some(ks) = keystore {
+            ks.save_key(&did_str, signing_key.clone()).await?;
+        }
+
+        Ok(Self {
             did,
             name,
             public_key: public_key_b64,
@@ -71,7 +79,17 @@ impl AgentIdentity {
             parent_did: None,
             delegation_depth: 0,
             private_key: Some(signing_key),
-        }
+        })
+    }
+
+    pub async fn load(
+        identity_json: &str,
+        keystore: &dyn KeyStore,
+    ) -> Result<Self> {
+        let mut identity: Self = serde_json::from_str(identity_json)?;
+        let private_key = keystore.load_key(&identity.did.to_string()).await?;
+        identity.private_key = private_key;
+        Ok(identity)
     }
 
     pub fn sign(&self, data: &[u8]) -> Option<Vec<u8>> {

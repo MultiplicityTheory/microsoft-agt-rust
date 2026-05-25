@@ -47,12 +47,13 @@ async fn main() -> Result<()> {
                 "admin@example.com".to_string(),
                 vec!["compute".to_string(), "storage".to_string()],
                 None,
-            );
+                None,
+            ).await?;
             
             println!("Agent Identity created: {}", identity.did);
             
             // Setup basic governance
-            let mut enforcer = PolicyEnforcer::new();
+            let mut enforcer = PolicyEnforcer::new(None);
             enforcer.register_tool(McpTool {
                 name: "delete_database".to_string(),
                 description: "Deletes the production database".to_string(),
@@ -66,28 +67,32 @@ async fn main() -> Result<()> {
 
             // Simulate tool calls
             println!("\nTesting tool calls:");
-            test_tool_call(&enforcer, &identity.did.to_string(), ring, "read_logs");
-            test_tool_call(&enforcer, &identity.did.to_string(), ring, "delete_database");
+            test_tool_call(&enforcer, &identity.did.to_string(), ring, "read_logs").await;
+            test_tool_call(&enforcer, &identity.did.to_string(), ring, "delete_database").await;
             
             println!("\nAgent {} is now running (simulated).", name);
         }
         Commands::Status { did } => {
             println!("Querying status for agent: {}", did);
             let scorer = RiskScorer::new();
-            let score = scorer.get_score(&did);
-            println!("Risk Score Report:");
-            println!("  Total Score: {}", score.total_score);
-            println!("  Identity Score: {}", score.identity_score);
-            println!("  Behavior Score: {}", score.behavior_score);
-            println!("  Status: active");
+            if let Some(score) = scorer.get_score(&did) {
+                println!("Risk Score Report:");
+                println!("  Total Score: {}", score.total_score);
+                println!("  Identity Score: {}", score.identity_score);
+                println!("  Behavior Score: {}", score.behavior_score);
+                println!("  Status: active");
+            } else {
+                eprintln!("Error: Agent with DID '{}' not found in registry.", did);
+                std::process::exit(1);
+            }
         }
     }
 
     Ok(())
 }
 
-fn test_tool_call(enforcer: &PolicyEnforcer, did: &str, ring: PrivilegeRing, tool: &str) {
-    if enforcer.can_call_tool(did, ring, tool) {
+async fn test_tool_call(enforcer: &PolicyEnforcer, did: &str, ring: PrivilegeRing, tool: &str) {
+    if enforcer.can_call_tool(did, ring, tool).await {
         println!("  [OK]  {} authorized for {}", did, tool);
     } else {
         println!("  [DENY] {} forbidden from using {}", did, tool);

@@ -65,18 +65,9 @@ impl RiskScorer {
         }
     }
 
-    pub fn get_score(&self, agent_did: &str) -> RiskScore {
+    pub fn get_score(&self, agent_did: &str) -> Option<RiskScore> {
         let state = self.state.read().unwrap();
-        state.scores.get(agent_did).cloned().unwrap_or_else(|| RiskScore {
-            agent_did: agent_did.to_string(),
-            total_score: 500, // Default
-            identity_score: 50,
-            behavior_score: 50,
-            network_score: 50,
-            compliance_score: 50,
-            active_signals: 0,
-            critical_signals: 0,
-        })
+        state.scores.get(agent_did).cloned()
     }
 
     pub fn add_signal(&self, agent_did: &str, signal: RiskSignal) {
