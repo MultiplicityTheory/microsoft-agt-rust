@@ -1,0 +1,24 @@
+pub mod identity { pub mod agent_id; pub mod credentials; pub mod mtls; pub mod risk; pub mod delegation; pub mod rotation; }
+pub mod transport;
+pub mod governance;
+
+#[cfg(test)]
+mod tests {
+    use crate::identity::agent_id::AgentIdentity;
+    use crate::identity::rotation::KeyRotationManager;
+
+    #[test]
+    fn test_key_rotation() {
+        let mut identity = AgentIdentity::create(
+            "test-agent".to_string(),
+            "test@example.com".to_string(),
+            vec![],
+            None
+        );
+        let old_public_key = identity.public_key.clone();
+
+        KeyRotationManager::rotate_keys(&mut identity);
+
+        assert_ne!(old_public_key, identity.public_key);
+    }
+}

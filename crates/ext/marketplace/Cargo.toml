@@ -1,0 +1,4 @@
+[package]
+name = "agent-ext-marketplace"
+version = "0.1.0"
+edition = "2021"
