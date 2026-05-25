@@ -1,0 +1,14 @@
+/home/multiplicity/microsoft-agt-rust/target/debug/deps/serde-2c4c300fe6bc369a.d: /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/multiplicity/microsoft-agt-rust/target/debug/build/serde-3eceff10943d83fb/out/private.rs
+
+/home/multiplicity/microsoft-agt-rust/target/debug/deps/libserde-2c4c300fe6bc369a.rlib: /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/multiplicity/microsoft-agt-rust/target/debug/build/serde-3eceff10943d83fb/out/private.rs
+
+/home/multiplicity/microsoft-agt-rust/target/debug/deps/libserde-2c4c300fe6bc369a.rmeta: /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/multiplicity/microsoft-agt-rust/target/debug/build/serde-3eceff10943d83fb/out/private.rs
+
+/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/multiplicity/microsoft-agt-rust/target/debug/build/serde-3eceff10943d83fb/out/private.rs:
+
+# env-dep:OUT_DIR=/home/multiplicity/microsoft-agt-rust/target/debug/build/serde-3eceff10943d83fb/out
