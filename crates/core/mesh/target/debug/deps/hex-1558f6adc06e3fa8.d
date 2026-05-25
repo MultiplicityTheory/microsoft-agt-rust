@@ -1,8 +1,0 @@
-/home/multiplicity/microsoft-agt-rust/crates/core/mesh/target/debug/deps/hex-1558f6adc06e3fa8.d: /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/lib.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/error.rs
-
-/home/multiplicity/microsoft-agt-rust/crates/core/mesh/target/debug/deps/libhex-1558f6adc06e3fa8.rlib: /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/lib.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/error.rs
-
-/home/multiplicity/microsoft-agt-rust/crates/core/mesh/target/debug/deps/libhex-1558f6adc06e3fa8.rmeta: /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/lib.rs /home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/error.rs
-
-/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/lib.rs:
-/home/multiplicity/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hex-0.4.3/src/error.rs:
