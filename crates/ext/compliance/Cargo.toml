@@ -4,4 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+agent-mesh-core = { path = "../../core/mesh" }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+

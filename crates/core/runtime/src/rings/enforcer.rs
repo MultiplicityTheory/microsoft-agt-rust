@@ -1,40 +1,6 @@
 use tracing::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
-use std::fmt;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum PrivilegeRing {
-    System = 0,
-    Trusted = 1,
-    Standard = 2,
-    Sandboxed = 3,
-}
-
-impl FromStr for PrivilegeRing {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "system" => Ok(PrivilegeRing::System),
-            "trusted" => Ok(PrivilegeRing::Trusted),
-            "standard" => Ok(PrivilegeRing::Standard),
-            "sandboxed" => Ok(PrivilegeRing::Sandboxed),
-            _ => Err(format!("Unknown privilege ring: {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for PrivilegeRing {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PrivilegeRing::System => write!(f, "System"),
-            PrivilegeRing::Trusted => write!(f, "Trusted"),
-            PrivilegeRing::Standard => write!(f, "Standard"),
-            PrivilegeRing::Sandboxed => write!(f, "Sandboxed"),
-        }
-    }
-}
+use agent_mesh_core::identity::agent_id::PrivilegeRing;
 
 pub struct Enforcer;
 

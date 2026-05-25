@@ -1,0 +1,34 @@
+syntax = "proto3";
+package agt.v1;
+
+import "agt/v1/types.proto";
+
+service RegistryService {
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+    rpc GetAttestation(GetAttestationRequest) returns (SignedAttestation);
+    rpc WatchPresence(WatchPresenceRequest) returns (stream PresenceEvent);
+}
+
+message RegisterRequest {
+    AgentIdentity identity = 1;
+    PrivilegeRing ring = 2;
+}
+
+message RegisterResponse {
+    bool success = 1;
+}
+
+message GetAttestationRequest {
+    string did = 1;
+}
+
+message WatchPresenceRequest {
+    string since_timestamp = 1; // ISO8601 or google.protobuf.Timestamp string
+}
+
+message PresenceEvent {
+    AgentDID did = 1;
+    string name = 2;
+    string address = 3;
+    bool is_registered = 4;
+}

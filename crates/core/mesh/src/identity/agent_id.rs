@@ -6,6 +6,42 @@ use base64::{Engine as _, engine::general_purpose};
 use sha2::{Sha256, Digest};
 use crate::identity::keystore::KeyStore;
 use anyhow::Result;
+use std::str::FromStr;
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PrivilegeRing {
+    System = 0,
+    Trusted = 1,
+    Standard = 2,
+    Sandboxed = 3,
+}
+
+impl FromStr for PrivilegeRing {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "system" => Ok(PrivilegeRing::System),
+            "trusted" => Ok(PrivilegeRing::Trusted),
+            "standard" => Ok(PrivilegeRing::Standard),
+            "sandboxed" => Ok(PrivilegeRing::Sandboxed),
+            _ => Err(format!("Unknown privilege ring: {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for PrivilegeRing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PrivilegeRing::System => write!(f, "System"),
+            PrivilegeRing::Trusted => write!(f, "Trusted"),
+            PrivilegeRing::Standard => write!(f, "Standard"),
+            PrivilegeRing::Sandboxed => write!(f, "Sandboxed"),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Hash, Eq, PartialEq)]
 pub struct AgentDID {

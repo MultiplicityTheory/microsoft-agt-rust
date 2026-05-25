@@ -1,0 +1,13 @@
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    std::env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path()?);
+    tonic_build::configure()
+        .compile_protos(
+            &[
+                "../../proto/agt/v1/registry.proto",
+                "../../proto/agt/v1/discovery.proto",
+                "../../proto/agt/v1/escalation.proto",
+            ],
+            &["../../proto"],
+        )?;
+    Ok(())
+}

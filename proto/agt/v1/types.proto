@@ -1,0 +1,53 @@
+syntax = "proto3";
+package agt.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum PrivilegeRing {
+    RING_UNKNOWN = 0;
+    SYSTEM = 1;
+    TRUSTED = 2;
+    STANDARD = 3;
+    SANDBOXED = 4;
+}
+
+enum DataCategory {
+    CATEGORY_UNKNOWN = 0;
+    PERSONAL_DATA = 1;
+    FINANCIAL_RECORD = 2;
+    AUDIT_LOG = 3;
+    SYSTEM_CONFIG = 4;
+}
+
+message AgentDID {
+    string method = 1;
+    string unique_id = 2;
+}
+
+message AgentIdentity {
+    AgentDID did = 1;
+    string name = 2;
+    string public_key_b64 = 3;
+    string sponsor_email = 4;
+    repeated string capabilities = 5;
+    PrivilegeRing ring = 6;
+}
+
+message SignedAttestation {
+    AttestationClaim claim = 1;
+    string registry_did = 2;
+    string signature_b64 = 3;
+}
+
+message AttestationClaim {
+    string subject_did = 1;
+    string public_key_b64 = 2;
+    google.protobuf.Timestamp issued_at = 3;
+    google.protobuf.Timestamp expires_at = 4;
+}
+
+message ActionRecord {
+    string action = 1;
+    google.protobuf.Timestamp timestamp = 2;
+    DataCategory resource_category = 3;
+}

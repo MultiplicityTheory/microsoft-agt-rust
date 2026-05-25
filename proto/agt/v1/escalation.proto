@@ -1,0 +1,53 @@
+syntax = "proto3";
+package agt.v1;
+
+import "agt/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+service EscalationService {
+    rpc RequestEscalation(EscalationRequest) returns (EscalationResponse);
+    rpc Approve(ApproveRequest) returns (EscalationEvent);
+    rpc Deny(DenyRequest) returns (EscalationEvent);
+    rpc ListPending(ListPendingRequest) returns (ListPendingResponse);
+}
+
+message EscalationRequest {
+    string agent_did = 1;
+    PrivilegeRing current_ring = 2;
+    PrivilegeRing requested_ring = 3;
+    string reason = 4;
+    google.protobuf.Timestamp timestamp = 5;
+}
+
+message EscalationResponse {
+    string request_id = 1; // UUID
+}
+
+message ApproveRequest {
+    string request_id = 1;
+    string approver_did = 2;
+    string signature_b64 = 3;
+}
+
+message DenyRequest {
+    string request_id = 1;
+    string approver_did = 2;
+    string cause = 3;
+}
+
+message ListPendingRequest {}
+
+message ListPendingResponse {
+    repeated EscalationRequest pending = 1;
+}
+
+message EscalationEvent {
+    string event_id = 1;
+    string agent_did = 2;
+    string approver_did = 3;
+    PrivilegeRing from_ring = 4;
+    PrivilegeRing to_ring = 5;
+    string outcome = 6; // "Approved" or "Denied: <cause>"
+    string reason = 7;
+    google.protobuf.Timestamp timestamp = 8;
+}

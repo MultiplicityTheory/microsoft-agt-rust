@@ -1,0 +1,30 @@
+syntax = "proto3";
+package agt.v1;
+
+import "agt/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+service DiscoveryService {
+    rpc ReportPresence(PresenceReport) returns (PresenceAck);
+    rpc WatchShadows(WatchShadowsRequest) returns (stream ShadowAlert);
+}
+
+message PresenceReport {
+    string name = 1;
+    string address = 2;
+}
+
+message PresenceAck {
+    bool success = 1;
+}
+
+message WatchShadowsRequest {
+    google.protobuf.Timestamp since_timestamp = 1;
+}
+
+message ShadowAlert {
+    AgentDID did = 1;
+    string name = 2;
+    google.protobuf.Timestamp detected_at = 3;
+    string transport_address = 4;
+}

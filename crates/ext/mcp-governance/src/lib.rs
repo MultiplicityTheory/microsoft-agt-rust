@@ -1,4 +1,5 @@
-use agent_runtime_core::rings::enforcer::{Enforcer, PrivilegeRing};
+use agent_runtime_core::rings::enforcer::Enforcer;
+use agent_mesh_core::identity::PrivilegeRing;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{warn, info};

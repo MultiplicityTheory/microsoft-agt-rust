@@ -10,5 +10,6 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+tokio = { workspace = true }
 agent-mesh-core = { path = "../../core/mesh" }
 agent-runtime-core = { path = "../../core/runtime" }
