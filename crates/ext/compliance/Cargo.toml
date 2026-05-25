@@ -9,7 +9,10 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 agent-mesh-core = { path = "../../core/mesh" }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
 sha2 = { workspace = true }
+
 hex = { workspace = true }
 uuid = { workspace = true }
 

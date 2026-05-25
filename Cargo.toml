@@ -41,8 +41,9 @@ ring = "0.17"
 rcgen = "0.13"
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 futures-core = "0.3"
+
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 tempfile = "3.10"

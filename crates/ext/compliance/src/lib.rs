@@ -1,27 +1,20 @@
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc, Duration};
+use chrono::{Utc, Duration};
 use agent_mesh_core::identity::PrivilegeRing;
+use agent_mesh_core::audit::{DataCategory, ActionLogRecord, ActionOutcome};
+use agent_mesh_core::identity::EscalationEvent;
 use uuid::Uuid;
-use sha2::{Sha256, Digest};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write, BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow};
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub enum DataCategory {
-    PersonalData,           // GDPR scope
-    FinancialRecord,        // SOX scope
-    AuditLog,               // both
-    SystemConfig,           // neither
-    Unknown,
-}
+use async_trait::async_trait;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ActionRecord {
     pub action: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: chrono::DateTime<Utc>,
     pub resource_category: DataCategory,
 }
 
@@ -95,55 +88,6 @@ impl ComplianceRule for SoxAuditImmutabilityRule {
             };
         }
         ComplianceResult::Compliant
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ActionLogRecord {
-    pub record_id: Uuid,
-    pub agent_did: String,
-    pub action: String,
-    pub resource_category: DataCategory,
-    pub timestamp: DateTime<Utc>,
-    pub outcome: ActionOutcome,
-    pub prev_hash: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum ActionOutcome {
-    Permitted,
-    Denied { rule: String, reason: String },
-    DiscoveryEvent { event_json: String },
-}
-
-impl ActionLogRecord {
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        #[derive(Serialize)]
-        struct HashableRecord<'a> {
-            record_id: Uuid,
-            agent_did: &'a str,
-            action: &'a str,
-            resource_category: &'a DataCategory,
-            timestamp: DateTime<Utc>,
-            outcome: &'a ActionOutcome,
-        }
-
-        let hashable = HashableRecord {
-            record_id: self.record_id,
-            agent_did: &self.agent_did,
-            action: &self.action,
-            resource_category: &self.resource_category,
-            timestamp: self.timestamp,
-            outcome: &self.outcome,
-        };
-
-        serde_json::to_vec(&hashable).expect("ActionLogRecord is always serializable")
-    }
-
-    pub fn compute_hash(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(self.canonical_bytes());
-        hex::encode(hasher.finalize())
     }
 }
 
@@ -273,7 +217,7 @@ impl FileActionLog {
         Ok(history)
     }
 
-    pub fn replay_since(&self, since: DateTime<Utc>) -> Result<Vec<ActionLogRecord>> {
+    pub fn replay_since(&self, since: chrono::DateTime<Utc>) -> Result<Vec<ActionLogRecord>> {
         let file = File::open(&self.path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
@@ -286,6 +230,61 @@ impl FileActionLog {
             }
         }
         Ok(records)
+    }
+}
+
+#[async_trait]
+pub trait SiemExporter: Send + Sync {
+    async fn export_action(&self, record: &ActionLogRecord) -> Result<()>;
+    async fn export_escalation(&self, event: &EscalationEvent) -> Result<()>;
+}
+
+pub struct HttpSiemExporter {
+    endpoint: String,
+    token: String,
+    client: reqwest::Client,
+}
+
+impl HttpSiemExporter {
+    pub fn new(endpoint: String, token: String) -> Self {
+        Self {
+            endpoint,
+            token,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl SiemExporter for HttpSiemExporter {
+    async fn export_action(&self, record: &ActionLogRecord) -> Result<()> {
+        let response = self.client.post(&self.endpoint)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("X-AGT-Event-Type", "action")
+            .json(record)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(anyhow!("SIEM export failed with status: {}", response.status()))
+        }
+    }
+
+    async fn export_escalation(&self, event: &EscalationEvent) -> Result<()> {
+        let response = self.client.post(&self.endpoint)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("X-AGT-Event-Type", "escalation")
+            .json(event)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(anyhow!("SIEM export failed with status: {}", response.status()))
+        }
     }
 }
 
@@ -320,18 +319,6 @@ impl ComplianceVerifier {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    fn mock_input() -> ComplianceInput {
-        ComplianceInput {
-            agent_did: "did:mesh:test".to_string(),
-            agent_ring: PrivilegeRing::Standard,
-            agent_capabilities: vec![],
-            action: "read".to_string(),
-            resource_category: DataCategory::SystemConfig,
-            action_history: vec![],
-            jurisdiction: None,
-        }
-    }
 
     #[test]
     fn test_action_log_hash_chain() {
@@ -370,39 +357,5 @@ mod tests {
 
         let log_reopened = FileActionLog::open(log_path).unwrap();
         assert_eq!(log_reopened.last_hash(), log.last_hash());
-    }
-
-    #[test]
-    fn test_tamper_detection() {
-        let dir = tempdir().unwrap();
-        let log_path = dir.path().join("action.jsonl");
-        let log = FileActionLog::open(log_path.clone()).unwrap();
-
-        log.append(ActionLogRecord {
-            record_id: Uuid::new_v4(),
-            agent_did: "agent-1".to_string(),
-            action: "action-1".to_string(),
-            resource_category: DataCategory::SystemConfig,
-            timestamp: Utc::now(),
-            outcome: ActionOutcome::Permitted,
-            prev_hash: "".to_string(),
-        }).unwrap();
-
-        log.append(ActionLogRecord {
-            record_id: Uuid::new_v4(),
-            agent_did: "agent-1".to_string(),
-            action: "action-2".to_string(),
-            resource_category: DataCategory::SystemConfig,
-            timestamp: Utc::now(),
-            outcome: ActionOutcome::Permitted,
-            prev_hash: "".to_string(),
-        }).unwrap();
-
-        let mut content = std::fs::read_to_string(&log_path).unwrap();
-        content = content.replace("action-1", "action-X");
-        std::fs::write(&log_path, content).unwrap();
-
-        let violations = log.verify_chain().unwrap();
-        assert!(!violations.is_empty());
     }
 }

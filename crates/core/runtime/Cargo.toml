@@ -12,7 +12,9 @@ anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
 agent-mesh-core = { path = "../mesh" }
+agent-ext-compliance = { path = "../../ext/compliance" }
 rand = "0.8"
+
 base64 = "0.22"
 ed25519-dalek = { workspace = true }
 

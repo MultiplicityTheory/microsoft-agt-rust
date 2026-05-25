@@ -7,7 +7,7 @@ use ed25519_dalek::{SigningKey, Signer};
 use base64::{Engine as _, engine::general_purpose};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use chrono::{DateTime, Utc, Duration};
+use chrono::{Utc, Duration};
 use rand::Rng;
 
 pub struct HttpAgentRegistry {

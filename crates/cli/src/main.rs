@@ -2,9 +2,9 @@ use clap::{Parser, Subcommand};
 use agent_mesh_core::identity::agent_id::AgentIdentity;
 use agent_mesh_core::identity::risk::RiskScorer;
 use agent_mesh_core::identity::keystore::{KeyStore, MemoryKeyStore, FileKeyStore};
-use agent_mesh_core::identity::registry::{AgentRegistry, MemoryAgentRegistry};
+use agent_mesh_core::identity::registry::MemoryAgentRegistry;
 use agent_mesh_core::identity::PrivilegeRing;
-use agent_runtime_core::rings::escalation::{EscalationManager, EscalationRequest, approval_payload};
+use agent_runtime_core::rings::escalation::EscalationManager;
 use agent_ext_mcp_governance::{PolicyEnforcer, McpTool};
 use agent_ext_discovery::{DiscoveryManager, DiscoverySource};
 use tracing_subscriber::EnvFilter;
@@ -16,6 +16,11 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
+use tonic::metadata::MetadataValue;
+
+pub mod proto {
+    tonic::include_proto!("agt.v1");
+}
 
 #[derive(Parser)]
 #[command(name = "agt")]
@@ -54,6 +59,12 @@ enum Commands {
         audit_log: Option<PathBuf>,
         #[arg(long)]
         action_log: Option<PathBuf>,
+        #[arg(long)]
+        registry_log: Option<PathBuf>,
+        #[arg(long)]
+        siem_endpoint: Option<String>,
+        #[arg(long)]
+        siem_token: Option<String>,
         /// Initialize a new registry keypair
         #[arg(long)]
         init: bool,
@@ -67,6 +78,15 @@ enum Commands {
     Log {
         #[command(subcommand)]
         subcommand: LogCommands,
+    },
+    /// Run the AGT Gateway (MCP Governance Proxy)
+    Gateway {
+        #[arg(short, long, default_value = "0.0.0.0:8080")]
+        listen: String,
+        #[arg(short, long)]
+        upstream: String,
+        #[arg(long)]
+        action_log: Option<PathBuf>,
     },
 }
 
@@ -83,15 +103,32 @@ enum LogCommands {
 enum EscalateCommands {
     /// Request privilege escalation
     Request {
+        #[arg(short, long, default_value = "http://localhost:7701")]
+        server: String,
         #[arg(short, long)]
         did: String,
         #[arg(short, long)]
         to_ring: PrivilegeRing,
         #[arg(short, long)]
         reason: String,
+        #[arg(short, long)]
+        key_dir: PathBuf,
     },
     /// Approve an escalation request
     Approve {
+        #[arg(short, long, default_value = "http://localhost:7701")]
+        server: String,
+        #[arg(short, long)]
+        id: Uuid,
+        #[arg(short, long)]
+        approver_did: String,
+        #[arg(short, long)]
+        key_dir: PathBuf,
+    },
+    /// Deny an escalation request
+    Deny {
+        #[arg(short, long, default_value = "http://localhost:7701")]
+        server: String,
         #[arg(short, long)]
         id: Uuid,
         #[arg(short, long)]
@@ -99,19 +136,17 @@ enum EscalateCommands {
         #[arg(short, long)]
         key_dir: PathBuf,
         #[arg(short, long)]
-        registry_pubkey: String,
-    },
-    /// Deny an escalation request
-    Deny {
-        #[arg(short, long)]
-        id: Uuid,
-        #[arg(short, long)]
-        approver_did: String,
-        #[arg(short, long)]
         cause: String,
     },
     /// List pending escalation requests
-    List,
+    List {
+        #[arg(short, long, default_value = "http://localhost:7701")]
+        server: String,
+        #[arg(short, long)]
+        did: String,
+        #[arg(short, long)]
+        key_dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -125,16 +160,14 @@ enum DiscoveryCommands {
         #[arg(short, long)]
         key_dir: PathBuf,
     },
-    /// Watch for new shadows (polling)
+    /// Watch for new shadows (streaming)
     Watch {
-        #[arg(short, long, default_value = "http://localhost:7700")]
-        server: String,
+        #[arg(short, long, default_value = "http://localhost:7701")]
+        grpc_server: String,
         #[arg(short, long)]
         approver_did: String,
         #[arg(short, long)]
         key_dir: PathBuf,
-        #[arg(short, long, default_value = "5")]
-        interval: u64,
     },
 }
 
@@ -188,11 +221,13 @@ async fn main() -> Result<()> {
                 name: "delete_database".to_string(),
                 description: "Deletes the production database".to_string(),
                 required_ring: PrivilegeRing::System,
+                default_category: agent_mesh_core::audit::DataCategory::FinancialRecord,
             });
             enforcer.register_tool(McpTool {
                 name: "read_logs".to_string(),
                 description: "Reads application logs".to_string(),
                 required_ring: PrivilegeRing::Standard,
+                default_category: agent_mesh_core::audit::DataCategory::AuditLog,
             });
 
             // 6. Discovery Audit: Shadow Agent Detection
@@ -233,86 +268,104 @@ async fn main() -> Result<()> {
         }
         Commands::Escalate { subcommand } => {
             match subcommand {
-                EscalateCommands::Request { did, to_ring, reason } => {
-                    let manager = EscalationManager::new(None, "dummy-key".to_string())?;
-                    let id = manager.request_escalation(EscalationRequest {
+                EscalateCommands::Request { server, did, to_ring, reason, key_dir } => {
+                    use proto::escalation_service_client::EscalationServiceClient;
+                    let mut client = EscalationServiceClient::connect(server).await?;
+                    
+                    let signing_key = load_key(&did, &key_dir).await?;
+                    let req = proto::EscalationRequest {
                         agent_did: did.clone(),
-                        current_ring: PrivilegeRing::Standard,
-                        requested_ring: to_ring,
+                        current_ring: proto::PrivilegeRing::Standard as i32, // Mock
+                        requested_ring: to_proto_ring(to_ring),
                         reason: reason.clone(),
-                        timestamp: Utc::now(),
-                    });
-                    println!("Escalation requested for {}. Request ID: {}", did, id);
-                }
-                EscalateCommands::Approve { id, approver_did, key_dir, registry_pubkey } => {
-                    let passphrase = std::env::var("AGT_KEY_PASSPHRASE")
-                        .unwrap_or_else(|_| "default-passphrase".to_string());
-                    
-                    let keystore = FileKeyStore::new(key_dir, &passphrase)?;
-                    let signing_key = keystore.load_key(&approver_did).await?
-                        .ok_or_else(|| anyhow::anyhow!("Private key not found for approver"))?;
-                    
-                    let registry = MemoryAgentRegistry::new(generate_signing_key(), "did:mesh:registry".to_string());
-                    let pubkey_b64 = general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
-                    let approver_identity = AgentIdentity {
-                        did: agent_mesh_core::identity::agent_id::AgentDID { method: "mesh".to_string(), unique_id: "approver".to_string() },
-                        name: "Approver".to_string(),
-                        public_key: pubkey_b64,
-                        sponsor_email: "".to_string(),
-                        capabilities: vec![],
-                        status: "active".to_string(),
-                        parent_did: None,
-                        delegation_depth: 0,
-                        private_key: Some(signing_key.clone()),
+                        timestamp: Some(to_proto_timestamp(Utc::now())),
                     };
-                    registry.register(&approver_identity, PrivilegeRing::System).await?;
 
-                    let manager = EscalationManager::new(None, registry_pubkey)?;
-                    manager.request_escalation(EscalationRequest {
-                        agent_did: "target-agent".to_string(),
-                        current_ring: PrivilegeRing::Standard,
-                        requested_ring: PrivilegeRing::Trusted,
-                        reason: "CLI Demo".to_string(),
-                        timestamp: Utc::now(),
-                    });
+                    let body_bytes = prost::Message::encode_to_vec(&req);
+                    let signature = general_purpose::STANDARD.encode(signing_key.sign(&body_bytes).to_bytes());
 
-                    let payload = approval_payload(&id, "target-agent", PrivilegeRing::Trusted);
-                    let signature = approver_identity.sign(&payload).unwrap();
+                    let mut request = tonic::Request::new(req);
+                    request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(did)?);
+                    request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(signature)?);
 
-                    match manager.approve(id, &approver_did, &signature, &registry).await {
-                        Ok(event) => println!("Escalation Approved: {:?}", event.outcome),
-                        Err(e) => eprintln!("Error: {}", e),
-                    }
+                    let response = client.request_escalation(request).await?;
+                    println!("Escalation requested. Request ID: {}", response.into_inner().request_id);
                 }
-                EscalateCommands::Deny { id, approver_did, cause } => {
-                    let manager = EscalationManager::new(None, "dummy".to_string())?;
-                    manager.request_escalation(EscalationRequest {
-                        agent_did: "target-agent".to_string(),
-                        current_ring: PrivilegeRing::Standard,
-                        requested_ring: PrivilegeRing::Trusted,
-                        reason: "CLI Demo".to_string(),
-                        timestamp: Utc::now(),
-                    });
+                EscalateCommands::Approve { server, id, approver_did, key_dir } => {
+                    use proto::escalation_service_client::EscalationServiceClient;
+                    let mut client = EscalationServiceClient::connect(server).await?;
+                    
+                    let signing_key = load_key(&approver_did, &key_dir).await?;
+                    let req = proto::ApproveRequest {
+                        request_id: id.to_string(),
+                        approver_did: approver_did.clone(),
+                        signature_b64: "".to_string(), // Filled after signing
+                    };
+                    
+                    let payload = format!("{}:target-agent:{}", id, proto::PrivilegeRing::Trusted as i32).into_bytes();
+                    let approval_sig = general_purpose::STANDARD.encode(signing_key.sign(&payload).to_bytes());
+                    
+                    let mut req_final = req;
+                    req_final.signature_b64 = approval_sig;
 
-                    match manager.deny(id, &approver_did, cause) {
-                        Ok(event) => println!("Escalation Denied: {:?}", event.outcome),
-                        Err(e) => eprintln!("Error: {}", e),
-                    }
+                    let body_bytes = prost::Message::encode_to_vec(&req_final);
+                    let outer_sig = general_purpose::STANDARD.encode(signing_key.sign(&body_bytes).to_bytes());
+
+                    let mut request = tonic::Request::new(req_final);
+                    request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(approver_did)?);
+                    request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(outer_sig)?);
+
+                    let response = client.approve(request).await?;
+                    println!("Escalation Approved: {}", response.into_inner().outcome);
                 }
-                EscalateCommands::List => {
-                    let manager = EscalationManager::new(None, "dummy".to_string())?;
-                    let pending = manager.pending_requests();
+                EscalateCommands::Deny { server, id, approver_did, key_dir, cause } => {
+                    use proto::escalation_service_client::EscalationServiceClient;
+                    let mut client = EscalationServiceClient::connect(server).await?;
+                    
+                    let signing_key = load_key(&approver_did, &key_dir).await?;
+                    let req = proto::DenyRequest {
+                        request_id: id.to_string(),
+                        approver_did: approver_did.clone(),
+                        cause,
+                    };
+
+                    let body_bytes = prost::Message::encode_to_vec(&req);
+                    let signature = general_purpose::STANDARD.encode(signing_key.sign(&body_bytes).to_bytes());
+
+                    let mut request = tonic::Request::new(req);
+                    request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(approver_did)?);
+                    request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(signature)?);
+
+                    let response = client.deny(request).await?;
+                    println!("Escalation Denied: {}", response.into_inner().outcome);
+                }
+                EscalateCommands::List { server, did, key_dir } => {
+                    use proto::escalation_service_client::EscalationServiceClient;
+                    let mut client = EscalationServiceClient::connect(server).await?;
+                    
+                    let signing_key = load_key(&did, &key_dir).await?;
+                    let req = proto::ListPendingRequest {};
+
+                    let body_bytes = prost::Message::encode_to_vec(&req);
+                    let signature = general_purpose::STANDARD.encode(signing_key.sign(&body_bytes).to_bytes());
+
+                    let mut request = tonic::Request::new(req);
+                    request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(did)?);
+                    request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(signature)?);
+
+                    let response = client.list_pending(request).await?;
+                    let pending = response.into_inner().pending;
                     if pending.is_empty() {
                         println!("No pending escalation requests.");
                     } else {
-                        for (id, req) in pending {
-                            println!("{}: {} requests {:?} (Reason: {})", id, req.agent_did, req.requested_ring, req.reason);
+                        for req in pending {
+                            println!("{}: requests {:?} (Reason: {})", req.agent_did, req.requested_ring, req.reason);
                         }
                     }
                 }
             }
         }
-        Commands::Daemon { listen, grpc_listen, audit_log, action_log, init } => {
+        Commands::Daemon { listen, grpc_listen, audit_log, action_log, registry_log, siem_endpoint, siem_token, init } => {
             if init {
                 let registry_key = generate_signing_key();
                 let registry_pubkey = general_purpose::STANDARD.encode(registry_key.verifying_key().to_bytes());
@@ -330,18 +383,34 @@ async fn main() -> Result<()> {
 
             let registry_pubkey = std::env::var("AGT_REGISTRY_PUBKEY")
                 .unwrap_or_else(|_| "placeholder-replace-me".to_string());
+            let registry_did = std::env::var("AGT_REGISTRY_DID")
+                .unwrap_or_else(|_| "did:mesh:registry".to_string());
 
             let action_log_path = action_log.unwrap_or_else(|| PathBuf::from("action-log.jsonl"));
             let file_action_log = agent_ext_compliance::FileActionLog::open(action_log_path)?;
 
+            let siem_exporter: Option<Arc<dyn agent_ext_compliance::SiemExporter>> = if let (Some(url), Some(token)) = (siem_endpoint, siem_token) {
+                Some(Arc::new(agent_ext_compliance::HttpSiemExporter::new(url, token)))
+            } else {
+                None
+            };
+
+            use agent_mesh_core::identity::registry::{AgentRegistry, FileAgentRegistry};
+            let registry: Arc<dyn AgentRegistry> = if let Some(path) = registry_log {
+                Arc::new(FileAgentRegistry::open(path, generate_signing_key(), registry_did)?)
+            } else {
+                Arc::new(MemoryAgentRegistry::new(generate_signing_key(), registry_did))
+            };
+
             let state = Arc::new(agent_daemon::ServerState {
-                registry: Arc::new(MemoryAgentRegistry::new(generate_signing_key(), "did:mesh:registry".to_string())),
+                registry,
                 key_store: Arc::new(agent_mesh_core::identity::keystore::MemoryKeyStore::new()),
                 policy_store: Arc::new(agent_ext_mcp_governance::store::MemoryPolicyStore::new()),
-                escalation_manager: Arc::new(EscalationManager::new(audit_log, registry_pubkey.clone())?),
+                escalation_manager: Arc::new(EscalationManager::new(audit_log, registry_pubkey.clone(), siem_exporter.clone())?),
                 discovery_manager: Arc::new(DiscoveryManager::new()),
                 compliance_verifier: Arc::new(agent_ext_compliance::ComplianceVerifier::default_policy()),
                 action_log: Arc::new(file_action_log),
+                siem_exporter,
                 registry_pubkey,
             });
 
@@ -351,24 +420,11 @@ async fn main() -> Result<()> {
         Commands::Discovery { subcommand } => {
             match subcommand {
                 DiscoveryCommands::Scan { server, approver_did, key_dir } => {
-                    let shadows = fetch_shadows(&server, &approver_did, &key_dir).await?;
+                    let shadows = fetch_shadows_http(&server, &approver_did, &key_dir).await?;
                     print_shadows(&shadows);
                 }
-                DiscoveryCommands::Watch { server, approver_did, key_dir, interval } => {
-                    println!("Watching for shadow agents on {} (interval: {}s)...", server, interval);
-                    let mut interval_timer = tokio::time::interval(tokio::time::Duration::from_secs(interval));
-                    loop {
-                        interval_timer.tick().await;
-                        match fetch_shadows(&server, &approver_did, &key_dir).await {
-                            Ok(shadows) => {
-                                if !shadows.is_empty() {
-                                    println!("\n[ALERT] {} shadow agents detected!", shadows.len());
-                                    print_shadows(&shadows);
-                                }
-                            }
-                            Err(e) => eprintln!("Error fetching shadows: {}", e),
-                        }
-                    }
+                DiscoveryCommands::Watch { grpc_server, approver_did, key_dir } => {
+                    grpc_discovery_watch(&grpc_server, &approver_did, &key_dir).await?;
                 }
             }
         }
@@ -390,6 +446,28 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Gateway { listen, upstream, action_log } => {
+            let registry_pubkey = std::env::var("AGT_REGISTRY_PUBKEY")
+                .unwrap_or_else(|_| "placeholder".to_string());
+            
+            let action_log_path = action_log.unwrap_or_else(|| PathBuf::from("gateway-action-log.jsonl"));
+            let file_action_log = agent_ext_compliance::FileActionLog::open(action_log_path)?;
+
+            let state = Arc::new(agent_daemon::ServerState {
+                registry: Arc::new(MemoryAgentRegistry::new(generate_signing_key(), "did:mesh:registry".to_string())),
+                key_store: Arc::new(agent_mesh_core::identity::keystore::MemoryKeyStore::new()),
+                policy_store: Arc::new(agent_ext_mcp_governance::store::MemoryPolicyStore::new()),
+                escalation_manager: Arc::new(EscalationManager::new(None, registry_pubkey.clone(), None)?),
+                discovery_manager: Arc::new(DiscoveryManager::new()),
+                compliance_verifier: Arc::new(agent_ext_compliance::ComplianceVerifier::default_policy()),
+                action_log: Arc::new(file_action_log),
+                siem_exporter: None,
+                registry_pubkey,
+            });
+
+            println!("Starting AGT Gateway on {} -> {}", listen, upstream);
+            agent_daemon::gateway::run_gateway(state, &listen, upstream).await?;
+        }
     }
 
     Ok(())
@@ -401,11 +479,14 @@ fn generate_signing_key() -> SigningKey {
     SigningKey::from_bytes(&bytes)
 }
 
-async fn fetch_shadows(server: &str, did: &str, key_dir: &std::path::Path) -> Result<Vec<agent_ext_discovery::DiscoveredAgent>> {
+async fn load_key(did: &str, key_dir: &std::path::Path) -> Result<SigningKey> {
     let passphrase = std::env::var("AGT_KEY_PASSPHRASE").unwrap_or_else(|_| "default-passphrase".to_string());
     let keystore = FileKeyStore::new(key_dir.to_path_buf(), &passphrase)?;
-    let signing_key = keystore.load_key(did).await?.ok_or_else(|| anyhow::anyhow!("Key not found"))?;
-    
+    keystore.load_key(did).await?.ok_or_else(|| anyhow::anyhow!("Key not found"))
+}
+
+async fn fetch_shadows_http(server: &str, did: &str, key_dir: &std::path::Path) -> Result<Vec<agent_ext_discovery::DiscoveredAgent>> {
+    let signing_key = load_key(did, key_dir).await?;
     let client = reqwest::Client::new();
     let url = format!("{}/v1/discovery/shadows", server);
     
@@ -421,6 +502,53 @@ async fn fetch_shadows(server: &str, did: &str, key_dir: &std::path::Path) -> Re
         Ok(response.json().await?)
     } else {
         Err(anyhow::anyhow!("Server error: {}", response.status()))
+    }
+}
+
+async fn grpc_discovery_watch(server: &str, did: &str, key_dir: &std::path::Path) -> Result<()> {
+    use proto::discovery_service_client::DiscoveryServiceClient;
+    use proto::WatchShadowsRequest;
+
+    let signing_key = load_key(did, key_dir).await?;
+
+    println!("Watching for shadow agents on {} (gRPC)...", server);
+
+    let mut client = DiscoveryServiceClient::connect(server.to_string()).await?;
+    
+    let request_payload = WatchShadowsRequest { since_timestamp: None };
+    let body_bytes = prost::Message::encode_to_vec(&request_payload);
+    let signature = general_purpose::STANDARD.encode(signing_key.sign(&body_bytes).to_bytes());
+
+    let mut request = tonic::Request::new(request_payload);
+    request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(did)?);
+    request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(signature)?);
+
+    let mut stream = client.watch_shadows(request).await?.into_inner();
+
+    while let Some(alert) = stream.message().await? {
+        println!("\n[ALERT] Shadow Agent Detected!");
+        println!("  DID: {:?}", alert.did);
+        println!("  Name: {}", alert.name);
+        println!("  Transport: {}", alert.transport_address);
+    }
+
+    Ok(())
+}
+
+fn to_proto_ring(ring: PrivilegeRing) -> i32 {
+    let p_ring = match ring {
+        PrivilegeRing::System => proto::PrivilegeRing::System,
+        PrivilegeRing::Trusted => proto::PrivilegeRing::Trusted,
+        PrivilegeRing::Standard => proto::PrivilegeRing::Standard,
+        PrivilegeRing::Sandboxed => proto::PrivilegeRing::Sandboxed,
+    };
+    p_ring as i32
+}
+
+fn to_proto_timestamp(dt: chrono::DateTime<Utc>) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: dt.timestamp(),
+        nanos: dt.timestamp_subsec_nanos() as i32,
     }
 }
 

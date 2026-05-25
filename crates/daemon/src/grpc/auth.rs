@@ -1,8 +1,7 @@
 use agent_mesh_core::identity::AgentIdentity;
 use agent_mesh_core::identity::registry::AgentRegistry;
 use base64::{Engine as _, engine::general_purpose};
-use tonic::{Request, Status};
-use prost::Message;
+use tonic::Status;
 
 pub async fn verify_request_signature(
     did: &str,

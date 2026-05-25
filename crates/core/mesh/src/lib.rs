@@ -1,4 +1,5 @@
 pub mod identity;
+pub mod audit;
 pub mod transport;
 pub mod governance;
 

@@ -9,24 +9,29 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use agent_mesh_core::identity::{AgentIdentity, PrivilegeRing};
-use agent_mesh_core::identity::agent_id::AgentDID;
+use agent_mesh_core::identity::{AgentIdentity, PrivilegeRing, AgentDID};
 use agent_mesh_core::identity::registry::AgentRegistry;
 use agent_mesh_core::identity::attestation::SignedAttestation;
 use agent_mesh_core::identity::keystore::KeyStore;
 use agent_mesh_core::identity::keystore_http::AttestedKeyResponse;
+use agent_mesh_core::audit::{ActionLogRecord, ActionOutcome, DataCategory};
 use agent_runtime_core::rings::escalation::EscalationManager;
-use agent_ext_discovery::{DiscoveryManager, DiscoverySource};
+use agent_ext_discovery::{DiscoveryManager, DiscoverySource, DiscoveryEvent};
 use agent_ext_mcp_governance::store::PolicyStore;
 use agent_ext_mcp_governance::McpPolicy;
-use agent_ext_compliance::{ComplianceVerifier, ComplianceInput, DataCategory, ComplianceResult, FileActionLog, ActionLogRecord, ActionOutcome};
+use agent_ext_compliance::{ComplianceVerifier, ComplianceInput, ComplianceResult, FileActionLog, SiemExporter};
 use uuid::Uuid;
 use base64::{Engine as _, engine::general_purpose};
 use chrono::Utc;
 
 pub mod grpc;
+pub mod gateway;
 use crate::grpc::proto::registry_service_server::RegistryServiceServer;
 use crate::grpc::registry::RegistryServiceImpl;
+use crate::grpc::proto::discovery_service_server::DiscoveryServiceServer;
+use crate::grpc::discovery::DiscoveryServiceImpl;
+use crate::grpc::proto::escalation_service_server::EscalationServiceServer;
+use crate::grpc::escalation::EscalationServiceImpl;
 use crate::grpc::auth::verify_request_signature;
 
 pub struct ServerState {
@@ -37,6 +42,7 @@ pub struct ServerState {
     pub discovery_manager: Arc<DiscoveryManager>,
     pub compliance_verifier: Arc<ComplianceVerifier>,
     pub action_log: Arc<FileActionLog>,
+    pub siem_exporter: Option<Arc<dyn SiemExporter>>,
     pub registry_pubkey: String,
 }
 
@@ -102,17 +108,56 @@ impl AgentServer {
         let http_listener = tokio::net::TcpListener::bind(http_addr).await?;
         tracing::info!("AgentServer HTTP listening on {}", http_addr);
 
-        let grpc_service = RegistryServiceImpl {
+        let registry_grpc = RegistryServiceImpl {
             registry: self.state.registry.clone(),
+            registry_pubkey: self.state.registry_pubkey.clone(),
+        };
+
+        let discovery_grpc = DiscoveryServiceImpl {
+            discovery_manager: self.state.discovery_manager.clone(),
+            action_log: self.state.action_log.clone(),
+            registry: self.state.registry.clone(),
+            registry_pubkey: self.state.registry_pubkey.clone(),
+        };
+
+        let escalation_grpc = EscalationServiceImpl {
+            manager: self.state.escalation_manager.clone(),
+            registry: self.state.registry.clone(),
+            policy_store: self.state.policy_store.clone(),
             registry_pubkey: self.state.registry_pubkey.clone(),
         };
         
         let grpc_addr_socket: SocketAddr = grpc_addr.parse()?;
         let grpc_server = tonic::transport::Server::builder()
-            .add_service(RegistryServiceServer::new(grpc_service))
+            .add_service(RegistryServiceServer::new(registry_grpc))
+            .add_service(DiscoveryServiceServer::new(discovery_grpc))
+            .add_service(EscalationServiceServer::new(escalation_grpc))
             .serve(grpc_addr_socket);
         
         tracing::info!("AgentServer gRPC listening on {}", grpc_addr);
+
+        // Start background worker to bridge DiscoveryEvents to ActionLog
+        let discovery_manager = self.state.discovery_manager.clone();
+        let action_log = self.state.action_log.clone();
+        tokio::spawn(async move {
+            let mut rx = discovery_manager.subscribe();
+            while let Ok(event) = rx.recv().await {
+                if matches!(event, DiscoveryEvent::Shadow(_)) {
+                    let did = match &event { DiscoveryEvent::Shadow(a) => a.did.to_string(), _ => unreachable!() };
+                    let _ = action_log.append(ActionLogRecord {
+                        record_id: Uuid::new_v4(),
+                        agent_did: did,
+                        action: "discovery_alert".to_string(),
+                        resource_category: DataCategory::Unknown,
+                        timestamp: Utc::now(),
+                        outcome: ActionOutcome::DiscoveryEvent { 
+                            event_json: serde_json::to_string(&event).unwrap_or_default() 
+                        },
+                        prev_hash: "".to_string(),
+                    });
+                }
+            }
+        });
 
         tokio::select! {
             r = axum::serve(http_listener, app.into_make_service_with_connect_info::<SocketAddr>()) => r.map_err(|e| anyhow::anyhow!(e)),
@@ -264,7 +309,7 @@ async fn save_key(
 
 async fn list_pending(
     State(state): State<Arc<ServerState>>,
-) -> Json<Vec<(Uuid, agent_runtime_core::rings::escalation::EscalationRequest)>> {
+) -> Json<Vec<(Uuid, agent_mesh_core::identity::EscalationRequest)>> {
     Json(state.escalation_manager.pending_requests())
 }
 
@@ -372,11 +417,16 @@ async fn execute_action(
         action: req.action.clone(),
         resource_category: req.resource_category,
         timestamp: Utc::now(),
-        outcome,
+        outcome: outcome.clone(),
         prev_hash: "".to_string(), // Filled by append()
     };
     
-    state.action_log.append(record).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state.action_log.append(record.clone()).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 4. SIEM Export
+    if let Some(ref exporter) = state.siem_exporter {
+        let _ = exporter.export_action(&record).await;
+    }
 
     if !is_compliant {
         return Ok(Json(ExecuteResponse {

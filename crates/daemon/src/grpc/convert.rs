@@ -1,10 +1,10 @@
 use crate::grpc::proto;
-use agent_mesh_core::identity::{AgentIdentity, PrivilegeRing, AgentDID};
+use agent_mesh_core::identity::{AgentIdentity, PrivilegeRing, AgentDID, EscalationRequest, EscalationEvent, EscalationOutcome};
 use agent_mesh_core::identity::attestation::{SignedAttestation, AttestationClaim};
-use agent_ext_compliance::DataCategory;
+use agent_mesh_core::audit::DataCategory;
 use chrono::{DateTime, Utc, TimeZone};
 use prost_types::Timestamp;
-use std::convert::{TryFrom, From};
+use std::convert::TryFrom;
 use tonic::Status;
 
 // --- Enums ---
@@ -131,4 +131,42 @@ pub fn from_proto_attestation(sa: proto::SignedAttestation) -> Result<SignedAtte
         registry_did: sa.registry_did,
         signature_b64: sa.signature_b64,
     })
+}
+
+pub fn to_proto_escalation_request(req: EscalationRequest) -> proto::EscalationRequest {
+    proto::EscalationRequest {
+        agent_did: req.agent_did,
+        current_ring: to_proto_ring(req.current_ring),
+        requested_ring: to_proto_ring(req.requested_ring),
+        reason: req.reason,
+        timestamp: Some(to_proto_timestamp(req.timestamp)),
+    }
+}
+
+pub fn from_proto_escalation_request(req: proto::EscalationRequest) -> Result<EscalationRequest, Status> {
+    Ok(EscalationRequest {
+        agent_did: req.agent_did,
+        current_ring: from_proto_ring(req.current_ring)?,
+        requested_ring: from_proto_ring(req.requested_ring)?,
+        reason: req.reason,
+        timestamp: from_proto_timestamp(req.timestamp.ok_or_else(|| Status::invalid_argument("Missing timestamp"))?)?,
+    })
+}
+
+pub fn to_proto_escalation_event(event: EscalationEvent) -> proto::EscalationEvent {
+    let outcome = match event.outcome {
+        EscalationOutcome::Approved => "Approved".to_string(),
+        EscalationOutcome::Denied { cause } => format!("Denied: {}", cause),
+    };
+
+    proto::EscalationEvent {
+        event_id: event.event_id.to_string(),
+        agent_did: event.agent_did,
+        approver_did: event.approver_did,
+        from_ring: to_proto_ring(event.from_ring),
+        to_ring: to_proto_ring(event.to_ring),
+        outcome,
+        reason: event.reason,
+        timestamp: Some(to_proto_timestamp(event.timestamp)),
+    }
 }

@@ -33,14 +33,17 @@ dependencies = [
  "chrono",
  "clap",
  "ed25519-dalek",
+ "futures-core",
  "hex",
  "prost",
+ "prost-types",
  "protoc-bin-vendored",
  "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
  "tracing",
@@ -66,6 +69,7 @@ dependencies = [
  "prost",
  "prost-types",
  "protoc-bin-vendored",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -83,8 +87,10 @@ version = "0.1.0"
 dependencies = [
  "agent-mesh-core",
  "anyhow",
+ "async-trait",
  "chrono",
  "hex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -103,6 +109,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -129,12 +136,17 @@ dependencies = [
  "base64",
  "ed25519-dalek",
  "hex",
+ "prost",
+ "prost-types",
+ "protoc-bin-vendored",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tonic",
+ "tonic-build",
  "tracing",
 ]
 
@@ -194,6 +206,7 @@ dependencies = [
 name = "agent-runtime-core"
 version = "0.1.0"
 dependencies = [
+ "agent-ext-compliance",
  "agent-mesh-core",
  "anyhow",
  "base64",
@@ -2597,6 +2610,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

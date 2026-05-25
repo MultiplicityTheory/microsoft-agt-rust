@@ -3,7 +3,9 @@ use crate::grpc::proto::{self, discovery_service_server::DiscoveryService};
 use crate::grpc::auth::{extract_grpc_auth, verify_request_signature};
 use crate::grpc::convert;
 use agent_ext_discovery::{DiscoveryManager, DiscoverySource, DiscoveryEvent};
-use agent_ext_compliance::{FileActionLog, ActionOutcome};
+use agent_ext_compliance::FileActionLog;
+use agent_mesh_core::audit::ActionOutcome;
+use agent_mesh_core::identity::agent_id::AgentDID;
 use std::sync::Arc;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use futures_core::Stream;
@@ -31,7 +33,7 @@ impl DiscoveryService for DiscoveryServiceImpl {
         verify_request_signature(&did_str, &sig, &body_bytes, self.registry.as_ref(), &self.registry_pubkey).await
             .map_err(|e| Status::unauthenticated(e))?;
 
-        let did = agent_mesh_core::identity::agent_id::AgentDID::from_str(&did_str)
+        let did = parse_did(&did_str)
             .map_err(|e| Status::invalid_argument(e))?;
 
         self.discovery_manager.report_presence(did, inner.name, inner.address, DiscoverySource::Active);
@@ -47,7 +49,6 @@ impl DiscoveryService for DiscoveryServiceImpl {
     ) -> Result<Response<Self::WatchShadowsStream>, Status> {
         let (did_str, sig) = extract_grpc_auth(request.metadata())?;
         
-        // Ring check: Only System ring can watch shadows
         let ring = self.registry.get_ring(&did_str).await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::unauthenticated("Agent not registered"))?;
@@ -105,21 +106,13 @@ impl DiscoveryService for DiscoveryServiceImpl {
     }
 }
 
-use std::str::FromStr;
-fn parse_did(s: &str) -> Result<agent_mesh_core::identity::agent_id::AgentDID, String> {
+fn parse_did(s: &str) -> Result<AgentDID, String> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 3 || parts[0] != "did" || parts[1] != "mesh" {
         return Err("Invalid DID format".to_string());
     }
-    Ok(agent_mesh_core::identity::agent_id::AgentDID {
+    Ok(AgentDID {
         method: "mesh".to_string(),
         unique_id: parts[2].to_string(),
     })
-}
-
-impl FromStr for agent_mesh_core::identity::agent_id::AgentDID {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_did(s)
-    }
 }

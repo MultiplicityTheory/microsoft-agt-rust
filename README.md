@@ -28,6 +28,29 @@ The project is organized as a Cargo workspace containing the core framework, ext
 
 ---
 
+## HTTP API Deprecation Notice
+
+The HTTP API on port 7700 is now **deprecated**. All clients should migrate to the gRPC API on port 7701. 
+- HTTP responses now include the `Deprecation: true` header.
+- The HTTP port will be disabled in a future release.
+
+### Migration Guide
+
+| Feature | HTTP Endpoint | gRPC Service |
+|---|---|---|
+| Registration | `POST /v1/agents/register` | `RegistryService.Register` |
+| Attestation | `GET /v1/agents/:did/attestation` | `RegistryService.GetAttestation` |
+| Discovery | `GET /v1/discovery/shadows` | `DiscoveryService.WatchShadows` (Stream) |
+| Escalation | `POST /v1/escalations/:id/approve` | `EscalationService.Approve` |
+
+#### Example: Watching Shadows (gRPC)
+Use the AGT CLI to watch for shadow agents via gRPC:
+```bash
+agt discovery watch --grpc-server http://localhost:7701 --approver-did <your-did> --key-dir <path>
+```
+
+---
+
 ## Component Implementation Status
 
 | Crate | Path | Status | Key Features / APIs Implemented |

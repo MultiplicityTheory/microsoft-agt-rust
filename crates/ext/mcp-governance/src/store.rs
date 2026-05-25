@@ -195,6 +195,97 @@ impl PolicyStore for HttpPolicyStore {
     }
 }
 
+use tonic::metadata::MetadataValue;
+
+pub mod proto {
+    tonic::include_proto!("agt.v1");
+}
+
+pub struct NetworkPolicyStore {
+    server_addr: String,
+    agent_did: String,
+    signing_key: SigningKey,
+}
+
+impl NetworkPolicyStore {
+    pub fn new(server_addr: String, agent_did: String, signing_key: SigningKey) -> Self {
+        Self {
+            server_addr,
+            agent_did,
+            signing_key,
+        }
+    }
+
+    async fn get_client(&self) -> Result<proto::escalation_service_client::EscalationServiceClient<tonic::transport::Channel>> {
+        proto::escalation_service_client::EscalationServiceClient::connect(self.server_addr.clone()).await
+            .map_err(|e| anyhow!("Failed to connect to gRPC server: {}", e))
+    }
+
+    fn sign(&self, body: &[u8]) -> String {
+        general_purpose::STANDARD.encode(self.signing_key.sign(body).to_bytes())
+    }
+}
+
+#[async_trait]
+impl PolicyStore for NetworkPolicyStore {
+    async fn save_policy(&self, agent_did: &str, policy: McpPolicy) -> Result<()> {
+        let mut client = self.get_client().await?;
+        let policy_json = serde_json::to_string(&policy)?;
+        
+        let req_payload = proto::SetPolicyRequest {
+            agent_did: agent_did.to_string(),
+            policy_json,
+        };
+
+        let body_bytes = prost::Message::encode_to_vec(&req_payload);
+        let signature = self.sign(&body_bytes);
+
+        let mut request = tonic::Request::new(req_payload);
+        request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(&self.agent_did)?);
+        request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(signature)?);
+
+        let response = client.set_policy(request).await?;
+        if response.into_inner().success {
+            Ok(())
+        } else {
+            Err(anyhow!("Failed to save policy via gRPC"))
+        }
+    }
+
+    async fn load_policy(&self, agent_did: &str) -> Result<Option<McpPolicy>> {
+        let mut client = self.get_client().await?;
+        
+        let req_payload = proto::GetPolicyRequest {
+            agent_did: agent_did.to_string(),
+        };
+
+        let body_bytes = prost::Message::encode_to_vec(&req_payload);
+        let signature = self.sign(&body_bytes);
+
+        let mut request = tonic::Request::new(req_payload);
+        request.metadata_mut().insert("x-agt-agent-did", MetadataValue::try_from(&self.agent_did)?);
+        request.metadata_mut().insert("x-agt-signature", MetadataValue::try_from(signature)?);
+
+        let response = client.get_policy(request).await?;
+        let inner = response.into_inner();
+        
+        if inner.success && !inner.policy_json.is_empty() {
+            let policy = serde_json::from_str(&inner.policy_json)?;
+            Ok(Some(policy))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn delete_policy(&self, _agent_did: &str) -> Result<()> {
+        Err(anyhow!("Delete not implemented in NetworkPolicyStore"))
+    }
+
+    async fn list_policies(&self) -> Result<HashMap<String, McpPolicy>> {
+        Err(anyhow!("List not implemented in NetworkPolicyStore"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,6 +10,8 @@ pub mod keystore_http;
 pub mod registry;
 pub mod registry_http;
 pub mod attestation;
+pub mod escalation;
+pub use escalation::{EscalationRequest, EscalationEvent, EscalationOutcome, approval_payload};
 
 #[cfg(test)]
 mod tests {

@@ -74,11 +74,9 @@ impl RiskScorer {
         let mut state = self.state.write().unwrap();
         state.signals.entry(agent_did.to_string()).or_default().push(signal.clone());
         
-        // Trigger recalculation if critical
-        if matches!(signal.severity, RiskSeverity::Critical) {
-            let score = Self::calculate_score(agent_did, &state.signals);
-            state.scores.insert(agent_did.to_string(), score);
-        }
+        // Always recalculate score to ensure consistency
+        let score = Self::calculate_score(agent_did, &state.signals);
+        state.scores.insert(agent_did.to_string(), score);
     }
 
     pub fn recalculate(&self, agent_did: &str) -> RiskScore {

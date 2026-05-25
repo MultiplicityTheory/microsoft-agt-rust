@@ -68,7 +68,7 @@ impl std::fmt::Display for AgentDID {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentIdentity {
     pub did: AgentDID,
     pub name: String,

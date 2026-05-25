@@ -9,6 +9,25 @@ service EscalationService {
     rpc Approve(ApproveRequest) returns (EscalationEvent);
     rpc Deny(DenyRequest) returns (EscalationEvent);
     rpc ListPending(ListPendingRequest) returns (ListPendingResponse);
+
+    // Policy Management (Sprint 11)
+    rpc GetPolicy(GetPolicyRequest) returns (PolicyResponse);
+    rpc SetPolicy(SetPolicyRequest) returns (PolicyResponse);
+}
+
+message GetPolicyRequest {
+    string agent_did = 1;
+}
+
+message SetPolicyRequest {
+    string agent_did = 1;
+    string policy_json = 2;
+}
+
+message PolicyResponse {
+    bool success = 1;
+    string policy_json = 2;
+    string error = 3;
 }
 
 message EscalationRequest {

@@ -21,6 +21,7 @@ agent-ext-discovery = { path = "../ext/discovery" }
 agent-ext-mcp-governance = { path = "../ext/mcp-governance" }
 agent-ext-compliance = { path = "../ext/compliance" }
 tonic = { workspace = true }
+reqwest = { workspace = true }
 
 prost = { workspace = true }
 prost-types = { workspace = true }

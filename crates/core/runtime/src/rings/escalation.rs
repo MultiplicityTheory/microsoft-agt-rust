@@ -1,7 +1,7 @@
-use agent_mesh_core::identity::{AgentIdentity, PrivilegeRing};
+use agent_mesh_core::identity::{AgentIdentity, PrivilegeRing, EscalationRequest, EscalationEvent, EscalationOutcome, approval_payload};
 use agent_mesh_core::identity::registry::AgentRegistry;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use agent_ext_compliance::SiemExporter;
+use chrono::Utc;
 use uuid::Uuid;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Mutex};
@@ -11,45 +11,19 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 use anyhow::Result;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EscalationRequest {
-    pub agent_did: String,
-    pub current_ring: PrivilegeRing,
-    pub requested_ring: PrivilegeRing,
-    pub reason: String,
-    pub timestamp: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EscalationEvent {
-    pub event_id: Uuid,
-    pub agent_did: String,
-    pub approver_did: String,
-    pub from_ring: PrivilegeRing,
-    pub to_ring: PrivilegeRing,
-    pub outcome: EscalationOutcome,
-    pub reason: String,
-    pub timestamp: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum EscalationOutcome {
-    Approved,
-    Denied { cause: String },
-}
-
-pub fn approval_payload(event_id: &Uuid, agent_did: &str, requested_ring: PrivilegeRing) -> Vec<u8> {
-    format!("{}:{}:{}", event_id, agent_did, requested_ring).into_bytes()
-}
-
 pub struct EscalationManager {
     pending: Arc<RwLock<HashMap<Uuid, EscalationRequest>>>,
     audit_log: Option<Arc<Mutex<BufWriter<File>>>>,
+    siem_exporter: Option<Arc<dyn SiemExporter>>,
     registry_pubkey: String,
 }
 
 impl EscalationManager {
-    pub fn new(audit_log_path: Option<PathBuf>, registry_pubkey: String) -> Result<Self> {
+    pub fn new(
+        audit_log_path: Option<PathBuf>, 
+        registry_pubkey: String,
+        siem_exporter: Option<Arc<dyn SiemExporter>>,
+    ) -> Result<Self> {
         let audit_log = if let Some(path) = audit_log_path {
             let file = OpenOptions::new()
                 .create(true)
@@ -63,6 +37,7 @@ impl EscalationManager {
         Ok(Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
             audit_log,
+            siem_exporter,
             registry_pubkey,
         })
     }
@@ -95,6 +70,7 @@ impl EscalationManager {
             let event = self.create_denied_event(event_id, &request, approver_did, "Only System-ring agents can approve escalation");
             warn!(event = ?event, "Escalation denied: insufficient approver privileges");
             let _ = self.log_event(&event);
+            let _ = self.export_to_siem(&event).await;
             return Ok(event);
         }
 
@@ -126,6 +102,7 @@ impl EscalationManager {
             let event = self.create_denied_event(event_id, &request, approver_did, "Approval signature invalid");
             warn!(event = ?event, "Escalation denied: invalid signature");
             let _ = self.log_event(&event);
+            let _ = self.export_to_siem(&event).await;
             return Ok(event);
         }
 
@@ -134,6 +111,7 @@ impl EscalationManager {
             let event = self.create_denied_event(event_id, &request, approver_did, "Requested ring must be more privileged");
             warn!(event = ?event, "Escalation denied: invalid ring transition");
             let _ = self.log_event(&event);
+            let _ = self.export_to_siem(&event).await;
             return Ok(event);
         }
 
@@ -150,6 +128,7 @@ impl EscalationManager {
 
         info!(event = ?event, "Escalation approved");
         let _ = self.log_event(&event);
+        let _ = self.export_to_siem(&event).await;
         Ok(event)
     }
 
@@ -166,7 +145,7 @@ impl EscalationManager {
         }
     }
 
-    pub fn deny(
+    pub async fn deny(
         &self,
         event_id: Uuid,
         approver_did: &str,
@@ -189,6 +168,7 @@ impl EscalationManager {
         };
         warn!(event = ?event, "Escalation explicitly denied");
         let _ = self.log_event(&event);
+        let _ = self.export_to_siem(&event).await;
         Ok(event)
     }
 
@@ -199,6 +179,13 @@ impl EscalationManager {
             writer.write_all(json.as_bytes())?;
             writer.write_all(b"\n")?;
             writer.flush()?;
+        }
+        Ok(())
+    }
+
+    async fn export_to_siem(&self, event: &EscalationEvent) -> Result<()> {
+        if let Some(ref exporter) = self.siem_exporter {
+            exporter.export_escalation(event).await?;
         }
         Ok(())
     }
@@ -214,9 +201,10 @@ mod tests {
     use super::*;
     use agent_mesh_core::identity::registry::MemoryAgentRegistry;
     use ed25519_dalek::SigningKey;
-    use rand::RngCore;
     use base64::{Engine as _, engine::general_purpose};
+    use rand::RngCore;
 
+    #[allow(dead_code)]
     fn generate_signing_key() -> SigningKey {
         let mut bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
@@ -225,7 +213,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_escalation_signed_approval() {
-        let registry_key = generate_signing_key();
+        let mut rng = rand::thread_rng();
+        let registry_key = SigningKey::generate(&mut rng);
         let registry_pubkey = general_purpose::STANDARD.encode(registry_key.verifying_key().to_bytes());
         
         let registry = MemoryAgentRegistry::new(registry_key, "did:mesh:registry".to_string());
@@ -240,7 +229,7 @@ mod tests {
         ).await.unwrap();
         registry.register(&approver, PrivilegeRing::System).await.unwrap();
 
-        let manager = EscalationManager::new(None, registry_pubkey).unwrap();
+        let manager = EscalationManager::new(None, registry_pubkey, None).unwrap();
         
         let request = EscalationRequest {
             agent_did: "did:mesh:agent-1".to_string(),

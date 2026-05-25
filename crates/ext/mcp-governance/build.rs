@@ -3,11 +3,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .compile_protos(
             &[
-                "../../proto/agt/v1/discovery.proto",
-                "../../proto/agt/v1/escalation.proto",
-                "../../proto/agt/v1/types.proto",
+                "../../../proto/agt/v1/escalation.proto",
             ],
-            &["../../proto"],
+            &["../../../proto"],
         )?;
     Ok(())
 }
