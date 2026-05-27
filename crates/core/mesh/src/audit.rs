@@ -3,6 +3,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use sha2::{Sha256, Digest};
 
+use std::str::FromStr;
+use std::fmt;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum DataCategory {
     PersonalData,           // GDPR scope
@@ -10,6 +13,33 @@ pub enum DataCategory {
     AuditLog,               // both
     SystemConfig,           // neither
     Unknown,
+}
+
+impl FromStr for DataCategory {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "personaldata" | "personal_data" | "pii" => Ok(DataCategory::PersonalData),
+            "financialrecord" | "financial_record" | "sox" => Ok(DataCategory::FinancialRecord),
+            "auditlog" | "audit_log" => Ok(DataCategory::AuditLog),
+            "systemconfig" | "system_config" => Ok(DataCategory::SystemConfig),
+            "unknown" => Ok(DataCategory::Unknown),
+            _ => Err(format!("Unknown data category: {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for DataCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataCategory::PersonalData => write!(f, "PersonalData"),
+            DataCategory::FinancialRecord => write!(f, "FinancialRecord"),
+            DataCategory::AuditLog => write!(f, "AuditLog"),
+            DataCategory::SystemConfig => write!(f, "SystemConfig"),
+            DataCategory::Unknown => write!(f, "Unknown"),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

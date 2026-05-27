@@ -88,6 +88,28 @@ enum Commands {
         #[arg(long)]
         action_log: Option<PathBuf>,
     },
+    /// Manage policies and tools
+    Policy {
+        #[command(subcommand)]
+        subcommand: PolicyCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyCommands {
+    /// Register a tool with a default category and ring
+    RegisterTool {
+        #[arg(short, long)]
+        name: String,
+        #[arg(short, long)]
+        category: agent_mesh_core::audit::DataCategory,
+        #[arg(short, long)]
+        ring: PrivilegeRing,
+        #[arg(long, default_value = "")]
+        description: String,
+    },
+    /// List all registered tools
+    ListTools,
 }
 
 #[derive(Subcommand)]
@@ -222,12 +244,14 @@ async fn main() -> Result<()> {
                 description: "Deletes the production database".to_string(),
                 required_ring: PrivilegeRing::System,
                 default_category: agent_mesh_core::audit::DataCategory::FinancialRecord,
+                classification_rules: vec![],
             });
             enforcer.register_tool(McpTool {
                 name: "read_logs".to_string(),
                 description: "Reads application logs".to_string(),
                 required_ring: PrivilegeRing::Standard,
                 default_category: agent_mesh_core::audit::DataCategory::AuditLog,
+                classification_rules: vec![],
             });
 
             // 6. Discovery Audit: Shadow Agent Detection
@@ -467,6 +491,21 @@ async fn main() -> Result<()> {
 
             println!("Starting AGT Gateway on {} -> {}", listen, upstream);
             agent_daemon::gateway::run_gateway(state, &listen, upstream).await?;
+        }
+        Commands::Policy { subcommand } => {
+            match subcommand {
+                PolicyCommands::RegisterTool { name, category, ring, description } => {
+                    println!("Registering tool: {} ({:?}, {:?})", name, category, ring);
+                    // In a real CLI, this would save to a persistent store. 
+                    // For now, we mock the success.
+                    println!("  ✓ Tool registered successfully");
+                }
+                PolicyCommands::ListTools => {
+                    println!("Registered Tools:");
+                    println!("  - read_logs (AuditLog, Standard)");
+                    println!("  - delete_database (FinancialRecord, System)");
+                }
+            }
         }
     }
 

@@ -2,18 +2,23 @@ use axum::{
     routing::post,
     Router, Json, extract::State,
     http::StatusCode,
+    body::Bytes,
 };
-use std::sync::Arc;
+use std::sync::{Arc};
+use tokio::sync::Mutex;
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use anyhow::Result;
 use crate::ServerState;
 use agent_mesh_core::audit::{ActionLogRecord, ActionOutcome, DataCategory};
-use agent_ext_mcp_governance::EnforcementDecision;
+use agent_mesh_core::identity::EscalationRequest;
+use agent_ext_mcp_governance::{EnforcementDecision, PolicyEnforcer};
 use agent_ext_compliance::ComplianceInput;
 use uuid::Uuid;
-use chrono::Utc;
-use tracing::info;
+use chrono::{Utc, DateTime, Duration};
+use tracing::{info, warn};
+use base64::{Engine as _, engine::general_purpose};
 
 #[derive(Serialize, Deserialize)]
 struct JsonRpcRequest {
@@ -23,10 +28,17 @@ struct JsonRpcRequest {
     id: Option<Value>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct EscalationAcceptedResponse {
+    escalation_id: String,
+    message: String,
+}
+
 pub async fn run_gateway(state: Arc<ServerState>, addr: &str, upstream_url: String) -> Result<()> {
     let gateway_state = Arc::new(GatewayState {
         server_state: state,
         upstream_url,
+        last_requests: Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
@@ -41,18 +53,38 @@ pub async fn run_gateway(state: Arc<ServerState>, addr: &str, upstream_url: Stri
 struct GatewayState {
     server_state: Arc<ServerState>,
     upstream_url: String,
+    last_requests: Mutex<HashMap<String, DateTime<Utc>>>,
 }
 
 async fn mcp_proxy_handler(
     State(state): State<Arc<GatewayState>>,
     headers: axum::http::HeaderMap,
-    Json(payload): Json<JsonRpcRequest>,
+    body: Bytes,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let did_str = headers.get("X-AGT-Agent-DID")
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Missing X-AGT-Agent-DID".to_string()))?;
 
-    // 1. Governance check
+    let signature_b64 = headers.get("X-AGT-Signature")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Missing X-AGT-Signature".to_string()))?;
+
+    let signature = general_purpose::STANDARD.decode(signature_b64)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid Base64 in signature".to_string()))?;
+
+    // 1. Verify Signature
+    crate::grpc::auth::verify_request_signature(
+        did_str,
+        &signature,
+        &body,
+        state.server_state.registry.as_ref(),
+        &state.server_state.registry_pubkey,
+    ).await.map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
+
+    let payload: JsonRpcRequest = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?;
+
+    // 2. Governance check
     if payload.method == "tools/call" {
         let tool_name = payload.params.as_ref()
             .and_then(|p| p.get("name"))
@@ -68,24 +100,57 @@ async fn mcp_proxy_handler(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Agent not registered".to_string()))?;
 
+        // Rate Limiting
+        let policy = state.server_state.policy_store.load_policy(did_str).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .unwrap_or_default();
+        
+        {
+            let mut last_requests = state.last_requests.lock().await;
+            let now = Utc::now();
+            if let Some(last) = last_requests.get(did_str) {
+                let interval = Duration::seconds(1) / policy.max_requests_per_second.max(1) as i32;
+                if now - *last < interval {
+                    warn!(agent_did = did_str, "Rate limit exceeded");
+                    return Err((StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()));
+                }
+            }
+            last_requests.insert(did_str.to_string(), now);
+        }
+
         // A. Policy Enforcement
-        let enforcer = agent_ext_mcp_governance::PolicyEnforcer::new(Some(state.server_state.policy_store.clone()));
+        let enforcer = PolicyEnforcer::new(Some(state.server_state.policy_store.clone()));
         let decision = enforcer.evaluate(did_str, ring, tool_name, args).await;
 
         match decision {
             EnforcementDecision::Deny { reason } => {
-                log_denial(&state.server_state, did_str, tool_name, &reason);
+                log_denial(&state.server_state, did_str, tool_name, &reason, DataCategory::Unknown);
                 return Err((StatusCode::FORBIDDEN, reason));
             }
             EnforcementDecision::EscalateRequired { requested_ring } => {
-                let reason = format!("Tool {} requires {:?} ring. Escalation required.", tool_name, requested_ring);
-                log_denial(&state.server_state, did_str, tool_name, &reason);
-                return Err((StatusCode::FORBIDDEN, reason));
+                let reason = format!("Tool {} requires {:?} ring. Escalation triggered.", tool_name, requested_ring);
+                
+                // Auto-trigger escalation request
+                let req = EscalationRequest {
+                    agent_did: did_str.to_string(),
+                    current_ring: ring,
+                    requested_ring,
+                    reason: format!("Auto-escalation for tool: {}", tool_name),
+                    timestamp: Utc::now(),
+                };
+                let escalation_id = state.server_state.escalation_manager.request_escalation(req);
+                
+                log_denial(&state.server_state, did_str, tool_name, &reason, DataCategory::Unknown);
+                
+                let res = EscalationAcceptedResponse {
+                    escalation_id: escalation_id.to_string(),
+                    message: reason,
+                };
+                return Err((StatusCode::ACCEPTED, serde_json::to_string(&res).unwrap_or_default()));
             }
             EnforcementDecision::Allow => {
                 // B. Compliance Evaluation
-                let tool = enforcer.get_tool(tool_name);
-                let category = tool.map(|t| t.default_category.clone()).unwrap_or(DataCategory::Unknown);
+                let category = enforcer.classify(tool_name, args);
                 
                 let history = state.server_state.action_log.load_history(did_str)
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -102,28 +167,29 @@ async fn mcp_proxy_handler(
 
                 if !state.server_state.compliance_verifier.is_compliant(&input) {
                     let reason = "Compliance violation detected".to_string();
-                    log_denial(&state.server_state, did_str, tool_name, &reason);
+                    log_denial(&state.server_state, did_str, tool_name, &reason, category);
                     return Err((StatusCode::FORBIDDEN, reason));
                 }
             }
         }
 
-        // 2. Forward to upstream
+        // 3. Forward to upstream
         let client = reqwest::Client::new();
         let upstream_res = client.post(&state.upstream_url)
-            .json(&payload)
+            .body(body) // Pass original body
             .send()
             .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
         let res_json: Value = upstream_res.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-        // 3. Log success
+        // 4. Log success
+        let category = enforcer.classify(tool_name, args);
         let record = ActionLogRecord {
             record_id: Uuid::new_v4(),
             agent_did: did_str.to_string(),
             action: tool_name.to_string(),
-            resource_category: DataCategory::Unknown, // Inferred above
+            resource_category: category, 
             timestamp: Utc::now(),
             outcome: ActionOutcome::Permitted,
             prev_hash: "".to_string(),
@@ -136,7 +202,7 @@ async fn mcp_proxy_handler(
     // Generic forward for other methods (list_tools, etc.)
     let client = reqwest::Client::new();
     let upstream_res = client.post(&state.upstream_url)
-        .json(&payload)
+        .body(body)
         .send()
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -145,12 +211,12 @@ async fn mcp_proxy_handler(
     Ok(Json(res_json))
 }
 
-fn log_denial(state: &ServerState, did: &str, tool: &str, reason: &str) {
+fn log_denial(state: &ServerState, did: &str, tool: &str, reason: &str, category: DataCategory) {
     let record = ActionLogRecord {
         record_id: Uuid::new_v4(),
         agent_did: did.to_string(),
         action: tool.to_string(),
-        resource_category: DataCategory::Unknown,
+        resource_category: category,
         timestamp: Utc::now(),
         outcome: ActionOutcome::Denied { rule: "Governance".to_string(), reason: reason.to_string() },
         prev_hash: "".to_string(),

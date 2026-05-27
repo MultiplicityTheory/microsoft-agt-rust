@@ -300,6 +300,8 @@ mod tests {
         let policy = McpPolicy {
             allowed_tools: vec!["tool1".to_string()],
             denylist: vec!["tool2".to_string()],
+            allow_unknown_tools: false,
+            max_requests_per_second: 10,
         };
 
         store.save_policy(agent_did, policy.clone()).await.unwrap();
